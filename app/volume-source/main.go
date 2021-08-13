@@ -10,6 +10,12 @@ import (
 	"k8s.io/klog/v2"
 )
 
+var (
+	rsyncDaemonImage  string
+	kubeletPodDirPath string
+	namespace         string
+)
+
 func main() {
 	klog.InitFlags(nil)
 	var kubeconfig *string
@@ -19,6 +25,9 @@ func main() {
 	} else {
 		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
 	}
+	flag.StringVar(&rsyncDaemonImage, "rsync-daemon-image", "ghcr.io/k8svol/rsync-daemon:ci", "Rsync daemon image")
+	flag.StringVar(&kubeletPodDirPath, "kubelet-pod-dir-path", "/var/lib/kubelet/pods", "Path of pods folder inside kubelet dir")
+	flag.StringVar(&namespace, "namespace", "k8svol", "Namespace of rsync source deployment")
 	flag.Parse()
 
 	cfg, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)

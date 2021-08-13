@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,8 +27,8 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
-	internalv1 "github.com/kvclone/types/apis/demo.io/v1"
-	"github.com/kvclone/types/constant"
+	internalv1 "github.com/k8s-volume-copy/types/apis/demo.io/v1"
+	"github.com/k8s-volume-copy/types/constant"
 )
 
 var (
@@ -41,16 +42,6 @@ var (
 		Group: constant.GroupDemoIO,
 		Kind:  constant.RsyncSourceKind,
 	}
-)
-
-const (
-	createdByLabel = "demo.io/created-by"
-	managedByLabel = "demo.io/managed-by"
-	nameLabel      = "demo.io/name"
-	appLabel       = "demo.io/app"
-	componentName  = "rsync-source-controller"
-
-	rsyncSourceProtectionFinalizer = "demo.io/rsync-source-protection"
 )
 
 type controller struct {
@@ -182,7 +173,7 @@ func (c *controller) syncPopulator(ctx context.Context, key, namespace, name str
 		return fmt.Errorf("error creating template config, error : %s", err)
 	}
 	cmTemplate := tc.getCmTemplate()
-	podTemplate := tc.getPodTemplate()
+	deploymentTemplate := tc.getDeploymentTemplate()
 	serviceTemplate := tc.getSvcTemplate()
 	delete := rsyncSource.DeletionTimestamp != nil
 	if delete {
@@ -191,8 +182,8 @@ func (c *controller) syncPopulator(ctx context.Context, key, namespace, name str
 			return fmt.Errorf("error ensuring configmap(false) for rsync source `%s` in `%s` namespace error: %s",
 				unstruct.GetName(), unstruct.GetNamespace(), err)
 		}
-		if err := c.ensurePod(ctx, false, rsyncSource.GetNamespace(), podTemplate.DeepCopy()); err != nil {
-			return fmt.Errorf("error ensuring pod(false) for rsync source `%s` in `%s` namespace error: %s",
+		if err := c.ensureDeployment(ctx, false, rsyncSource.GetNamespace(), deploymentTemplate.DeepCopy()); err != nil {
+			return fmt.Errorf("error ensuring deploymet(false) for rsync source `%s` in `%s` namespace error: %s",
 				unstruct.GetName(), unstruct.GetNamespace(), err)
 		}
 		if err := c.ensureService(ctx, false, rsyncSource.GetNamespace(), serviceTemplate.DeepCopy()); err != nil {
@@ -214,7 +205,7 @@ func (c *controller) syncPopulator(ctx context.Context, key, namespace, name str
 		return fmt.Errorf("error ensuring configmap(true) for rsync source `%s` in `%s` namespace error: %s",
 			unstruct.GetName(), unstruct.GetNamespace(), err)
 	}
-	if err := c.ensurePod(ctx, true, rsyncSource.GetNamespace(), podTemplate.DeepCopy()); err != nil {
+	if err := c.ensureDeployment(ctx, true, rsyncSource.GetNamespace(), deploymentTemplate.DeepCopy()); err != nil {
 		return fmt.Errorf("error ensuring pod(true) for rsync source `%s` in `%s` namespace error: %s",
 			unstruct.GetName(), unstruct.GetNamespace(), err)
 	}
@@ -232,11 +223,11 @@ if !want and !found return nil
 if want and !found -> create return error/nil
 if !want and found -> delete return error/nil
 */
-func (c *controller) ensurePod(ctx context.Context, want bool, namespace string, pod *corev1.Pod) error {
-	podClone := pod.DeepCopy()
+func (c *controller) ensureDeployment(ctx context.Context, want bool, namespace string, deployment *appsv1.Deployment) error {
+	deploymentClone := deployment.DeepCopy()
 	found := true
-	obj, err := c.kubeClient.CoreV1().Pods(namespace).
-		Get(ctx, podClone.Name, metav1.GetOptions{})
+	obj, err := c.kubeClient.AppsV1().Deployments(namespace).
+		Get(ctx, deploymentClone.Name, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			found = false
@@ -244,12 +235,12 @@ func (c *controller) ensurePod(ctx context.Context, want bool, namespace string,
 			return err
 		}
 	}
-	if found && (obj.GetLabels() == nil || obj.GetLabels()[createdByLabel] != componentName) {
+	if found && (obj.GetLabels() == nil || obj.GetLabels()[constant.CreatedByLabel] != constant.ComponentNameRsyncSourceController) {
 		return fmt.Errorf("resource found but not created by this operator")
 	}
 	if want && found {
-		if isRestartRequired(*obj, *pod) {
-			return c.ensurePod(ctx, false, namespace, podClone)
+		if isDeleteRequired(*obj, *deployment) {
+			return c.ensureDeployment(ctx, false, namespace, deploymentClone)
 		}
 		return nil
 	}
@@ -257,13 +248,13 @@ func (c *controller) ensurePod(ctx context.Context, want bool, namespace string,
 		return nil
 	}
 	if want && !found {
-		_, err := c.kubeClient.CoreV1().Pods(namespace).
-			Create(ctx, podClone, metav1.CreateOptions{})
+		_, err := c.kubeClient.AppsV1().Deployments(namespace).
+			Create(ctx, deploymentClone, metav1.CreateOptions{})
 		return err
 	}
 	if !want && found {
-		err := c.kubeClient.CoreV1().Pods(namespace).
-			Delete(ctx, podClone.Name, metav1.DeleteOptions{})
+		err := c.kubeClient.AppsV1().Deployments(namespace).
+			Delete(ctx, deploymentClone.Name, metav1.DeleteOptions{})
 		return err
 	}
 	return nil
@@ -288,7 +279,7 @@ func (c *controller) ensureService(ctx context.Context, want bool, namespace str
 			return err
 		}
 	}
-	if found && (obj.GetLabels() == nil || obj.GetLabels()[createdByLabel] != componentName) {
+	if found && (obj.GetLabels() == nil || obj.GetLabels()[constant.CreatedByLabel] != constant.ComponentNameRsyncSourceController) {
 		return fmt.Errorf("resource found but not created by this operator")
 	}
 	if want == found {
@@ -326,7 +317,7 @@ func (c *controller) ensureConfigMap(ctx context.Context, want bool, namespace s
 			return err
 		}
 	}
-	if found && (obj.GetLabels() == nil || obj.GetLabels()[createdByLabel] != componentName) {
+	if found && (obj.GetLabels() == nil || obj.GetLabels()[constant.CreatedByLabel] != constant.ComponentNameRsyncSourceController) {
 		return fmt.Errorf("resource found but not created by this operator")
 	}
 	if want == found {
@@ -364,7 +355,7 @@ func (c *controller) ensureRsyncSourceFinalizer(ctx context.Context, want bool, 
 	finalizers := []string{}
 	found := false
 	for _, v := range cr.GetFinalizers() {
-		if v == rsyncSourceProtectionFinalizer {
+		if v == constant.RsyncSourceProtectionFinalizer {
 			found = true
 			continue
 		}
@@ -374,7 +365,7 @@ func (c *controller) ensureRsyncSourceFinalizer(ctx context.Context, want bool, 
 		return nil
 	}
 	if want {
-		finalizers = append(finalizers, rsyncSourceProtectionFinalizer)
+		finalizers = append(finalizers, constant.RsyncSourceProtectionFinalizer)
 	}
 	clone := cr.DeepCopy()
 	clone.Finalizers = finalizers

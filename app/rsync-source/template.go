@@ -1,96 +1,120 @@
 package main
 
 import (
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	internalv1 "github.com/kvclone/types/apis/demo.io/v1"
+	internalv1 "github.com/k8s-volume-copy/types/apis/demo.io/v1"
+	"github.com/k8s-volume-copy/types/constant"
 )
 
 type templateConfig struct {
 	name      string
 	namespace string
-	source    internalv1.RsyncSourceSpec
+	rsync     internalv1.RsyncSourceSpec
 }
 
 func templateConfigFromRsyncSource(cr internalv1.RsyncSource) (*templateConfig, error) {
 	tc := &templateConfig{
 		name:      cr.GetName(),
 		namespace: cr.GetNamespace(),
-		source:    cr.Spec,
+		rsync:     cr.Spec,
 	}
 	return tc, nil
 }
 
-func (tc *templateConfig) getPodTemplate() *corev1.Pod {
-	pod := corev1.Pod{
+func (tc *templateConfig) getDeploymentTemplate() *appsv1.Deployment {
+	nodeSelector := make(map[string]string)
+	if tc.rsync.HostName != "" {
+		nodeSelector[constant.K8SIOHostName] = tc.rsync.HostName
+	}
+
+	deploy := appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
-			Kind:       "Pod",
-			APIVersion: "v1",
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: tc.name,
 			Labels: map[string]string{
-				createdByLabel: componentName,
-				managedByLabel: componentName,
-				nameLabel:      tc.name,
-				appLabel:       tc.name,
+				constant.CreatedByLabel: constant.ComponentNameRsyncSourceController,
+				constant.NameLabel:      tc.name,
+				constant.AppLabel:       tc.name,
 			},
 		},
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{
-				{
-					Name:            "rsync-daemon",
-					Image:           tc.source.Image,
-					ImagePullPolicy: corev1.PullAlways,
-					Env: []corev1.EnvVar{
-						{
-							Name:  "RSYNC_PASSWORD",
-							Value: tc.source.Password,
-						},
-					},
-					Ports: []corev1.ContainerPort{
-						{
-							Name:          "rsync-daemon",
-							ContainerPort: 873,
-						},
-					},
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      tc.source.Volume.Name,
-							MountPath: "/data",
-							ReadOnly:  true,
-							MountPropagation: func() *corev1.MountPropagationMode {
-								name := corev1.MountPropagationHostToContainer
-								return &name
-							}(),
-						},
-						{
-							Name:      "config",
-							MountPath: "/etc/rsyncd.con",
-							SubPath:   "rsyncd.con",
-						},
-					},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: tc.rsync.Replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					constant.CreatedByLabel: constant.ComponentNameRsyncSourceController,
+					constant.NameLabel:      tc.name,
+					constant.AppLabel:       tc.name,
 				},
 			},
-			Volumes: []corev1.Volume{
-				tc.source.Volume,
-				{
-					Name: "config",
-					VolumeSource: corev1.VolumeSource{
-						ConfigMap: &corev1.ConfigMapVolumeSource{
-							LocalObjectReference: corev1.LocalObjectReference{
-								Name: tc.name,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						constant.CreatedByLabel: constant.ComponentNameRsyncSourceController,
+						constant.NameLabel:      tc.name,
+						constant.AppLabel:       tc.name,
+					},
+				},
+				Spec: corev1.PodSpec{
+					NodeSelector: nodeSelector,
+					Containers: []corev1.Container{
+						{
+							Name:            "rsync-daemon",
+							Image:           tc.rsync.Image,
+							ImagePullPolicy: corev1.PullAlways,
+							Env: []corev1.EnvVar{
+								{
+									Name:  "RSYNC_PASSWORD",
+									Value: tc.rsync.Password,
+								},
+							},
+							Ports: []corev1.ContainerPort{
+								{
+									Name:          "rsync-daemon",
+									ContainerPort: 873,
+								},
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      tc.rsync.Volume.Name,
+									MountPath: "/data",
+									ReadOnly:  true,
+									MountPropagation: func() *corev1.MountPropagationMode {
+										name := corev1.MountPropagationHostToContainer
+										return &name
+									}(),
+								},
+								{
+									Name:      "config",
+									MountPath: "/etc/rsyncd.con",
+									SubPath:   "rsyncd.con",
+								},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						tc.rsync.Volume,
+						{
+							Name: "config",
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: tc.name,
+									},
+								},
 							},
 						},
 					},
 				},
 			},
-			RestartPolicy: corev1.RestartPolicyNever,
-			NodeName:      tc.source.NodeName,
 		},
 	}
-	return &pod
+	return &deploy
 }
 
 func (tc *templateConfig) getCmTemplate() *corev1.ConfigMap {
@@ -102,9 +126,8 @@ func (tc *templateConfig) getCmTemplate() *corev1.ConfigMap {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: tc.name,
 			Labels: map[string]string{
-				createdByLabel: componentName,
-				managedByLabel: componentName,
-				nameLabel:      tc.name,
+				constant.CreatedByLabel: constant.ComponentNameRsyncSourceController,
+				constant.NameLabel:      tc.name,
 			},
 		},
 		Data: map[string]string{
@@ -123,9 +146,8 @@ func (tc *templateConfig) getSvcTemplate() *corev1.Service {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: tc.name,
 			Labels: map[string]string{
-				createdByLabel: componentName,
-				managedByLabel: componentName,
-				nameLabel:      tc.name,
+				constant.CreatedByLabel: constant.ComponentNameRsyncSourceController,
+				constant.NameLabel:      tc.name,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -137,8 +159,9 @@ func (tc *templateConfig) getSvcTemplate() *corev1.Service {
 				},
 			},
 			Selector: map[string]string{
-				nameLabel: tc.name,
-				appLabel:  tc.name,
+				constant.CreatedByLabel: constant.ComponentNameRsyncSourceController,
+				constant.NameLabel:      tc.name,
+				constant.AppLabel:       tc.name,
 			},
 		},
 	}

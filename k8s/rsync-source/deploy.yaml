@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rsync-source
+  namespace: k8svol
+  labels:
+    k8svol.io/name: rsync-source
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: rsync-source
+  labels:
+    k8svol.io/name: rsync-source
+rules:
+- apiGroups: [""]
+  resources: [configmaps]
+  verbs: [get, create, delete]
+- apiGroups: [""]
+  resources: [services]
+  verbs: [get, create, delete]
+
+- apiGroups: ["apps"]
+  resources: [deployments]
+  verbs: [get, create, delete]
+
+- apiGroups: [demo.io]
+  resources: [rsyncsources]
+  verbs: [get, watch, list, update]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: rsync-source
+  labels:
+    demo.io/name: rsync-source
+subjects:
+- kind: ServiceAccount
+  name: rsync-source
+  namespace: k8svol
+roleRef:
+  kind: ClusterRole
+  name: rsync-source
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rsync-source
+  namespace: k8svol
+  labels:
+    demo.io/app: rsync-source
+    demo.io/name: rsync-source
+spec:
+  serviceName: rsync-source
+  replicas: 1
+  selector:
+    matchLabels:
+      demo.io/app: rsync-source
+      demo.io/name: rsync-source
+  template:
+    metadata:
+      labels:
+        demo.io/app: rsync-source
+        demo.io/name: rsync-source
+    spec:
+      serviceAccount: rsync-source
+      containers:
+      - name: rsync-source
+        image: ghcr.io/k8svol/rsync-source:ci
+        imagePullPolicy: Always
+        command:
+        - rsync-source
+        args:
+        - --v=2

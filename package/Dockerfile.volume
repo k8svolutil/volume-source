@@ -1,0 +1,10 @@
+FROM docker.io/library/golang:1.16 AS builder
+LABEL type=build-container
+WORKDIR /go/src/github.com/k8s-volume-copy/volume-source
+COPY . .
+RUN make volume-source-bin
+
+FROM scratch
+ENV PATH=/bin
+COPY --from=builder /go/src/github.com/k8s-volume-copy/volume-source/bin/volume-source /bin/volume-source
+CMD ["volume-source"]
